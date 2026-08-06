@@ -2,6 +2,8 @@ import { Router, type Request, type Response } from "express";
 import { validateLogEntry, type ValidatedLogEntry } from "../validation/logValidation.js";
 import { validateQueryParams, encodeCursor } from "../validation/queryValidation.js";
 import { insertLogs, queryLogs } from "../repositories/logRepository.js";
+import { validateAggregateParams } from "../validation/queryValidation.js";
+import { queryAggregate } from "../repositories/logRepository.js";
 
 export const logsRouter = Router();
 
@@ -82,5 +84,22 @@ logsRouter.get("/logs", async (req: Request, res: Response) => {
       attributes: row.attributes,
     })),
     next_cursor: nextCursor,
+  });
+});
+logsRouter.get("/logs/aggregate", async (req: Request, res: Response) => {
+  const validation = validateAggregateParams(req.query as Record<string, unknown>);
+
+  if (!validation.valid || !validation.params) {
+    return res.status(400).json({ error: validation.error });
+  }
+
+  const rows = await queryAggregate(validation.params);
+
+  return res.status(200).json({
+    buckets: rows.map((row) => ({
+      start: row.bucketStart.toISOString(),
+      group: row.group,
+      count: row.count,
+    })),
   });
 });

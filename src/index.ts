@@ -3,6 +3,7 @@ import "dotenv/config";
 import { logsRouter } from "./routes/logs.js";
 import { db } from "./db/index.js";
 import { sql } from "drizzle-orm";
+import { migrate } from "drizzle-orm/node-postgres/migrator";
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 8080;
@@ -38,6 +39,10 @@ app.use(
 
 async function start() {
   try {
+    console.log("Applying database migrations...");
+    await migrate(db, { migrationsFolder: "./src/db/migrations" });
+    console.log("Migrations applied successfully.");
+
     await db.execute(sql`SELECT 1`);
     isReady = true;
     console.log("Database connection established.");
