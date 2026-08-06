@@ -4,6 +4,8 @@ import { logsRouter } from "./routes/logs.js";
 import { db } from "./db/index.js";
 import { sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
+import { runRetentionMaintenance, startRetentionScheduler } from "./db/retention.js";
+
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 8080;
@@ -42,6 +44,9 @@ async function start() {
     console.log("Applying database migrations...");
     await migrate(db, { migrationsFolder: "./src/db/migrations" });
     console.log("Migrations applied successfully.");
+
+    await runRetentionMaintenance();
+    startRetentionScheduler();
 
     await db.execute(sql`SELECT 1`);
     isReady = true;

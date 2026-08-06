@@ -1,6 +1,6 @@
 {
-  "id": "062a9be8-7b2d-4127-a8da-1665c1680a8b",
-  "prevId": "00000000-0000-0000-0000-000000000000",
+  "id": "7c4ff53c-50cc-4beb-95e3-aa7684afa11a",
+  "prevId": "062a9be8-7b2d-4127-a8da-1665c1680a8b",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -64,9 +64,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "idx_logs_service_timestamp": {
           "name": "idx_logs_service_timestamp",
@@ -85,9 +85,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "idx_logs_level_timestamp": {
           "name": "idx_logs_level_timestamp",
@@ -106,9 +106,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "idx_logs_attributes": {
           "name": "idx_logs_attributes",
@@ -121,9 +121,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "gin",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {},
@@ -136,10 +136,10 @@
   },
   "enums": {},
   "schemas": {},
+  "views": {},
   "sequences": {},
   "roles": {},
   "policies": {},
-  "views": {},
   "_meta": {
     "columns": {},
     "schemas": {},
