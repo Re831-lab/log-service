@@ -15,6 +15,13 @@
       "when": 1786013760224,
       "tag": "0001_add_partition_management",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786579031171,
+      "tag": "0002_noop",
+      "breakpoints": true
     }
   ]
 }
