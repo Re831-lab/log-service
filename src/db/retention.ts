@@ -17,7 +17,7 @@ export async function runRetentionMaintenance(): Promise<void> {
     if (result.rows.length > 0) {
       console.log(
         `Retention: dropped ${result.rows.length} old partition(s):`,
-        result.rows.map((r) => r.dropped_partition).join(", ")
+        result.rows.map((r: any) => r.dropped_partition).join(", ")
       );
     }
   } catch (error) {
@@ -26,7 +26,7 @@ export async function runRetentionMaintenance(): Promise<void> {
 }
 
 export function startRetentionScheduler(): void {
-  const intervalMs = 60 * 60 * 1000; 
+  const intervalMs = 60 * 60 * 1000;
   setInterval(runRetentionMaintenance, intervalMs);
   console.log(
     `Retention scheduler started (runs every hour, retention: ${RETENTION_DAYS} days).`

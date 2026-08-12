@@ -14,6 +14,8 @@ CREATE INDEX "idx_logs_service_timestamp" ON "logs" USING btree ("service","time
 --> statement-breakpoint
 CREATE INDEX "idx_logs_level_timestamp" ON "logs" USING btree ("level","timestamp" DESC NULLS LAST);
 --> statement-breakpoint
-CREATE INDEX "idx_logs_attributes" ON "logs" USING gin ("attributes");
+CREATE INDEX "idx_logs_attr_user_id" ON "logs" USING btree ((attributes->>'user_id'));
+--> statement-breakpoint
+CREATE INDEX "idx_logs_attr_region" ON "logs" USING btree ((attributes->>'region'));
 --> statement-breakpoint
 CREATE TABLE logs_default PARTITION OF logs DEFAULT;

@@ -34,7 +34,6 @@ export function validateQueryParams(
     result.service = query.service;
   }
 
-  // level
   if (query.level !== undefined) {
     if (
       typeof query.level !== "string" ||
@@ -45,7 +44,6 @@ export function validateQueryParams(
     result.level = query.level;
   }
 
-  // since
   if (query.since !== undefined) {
     if (typeof query.since !== "string") {
       return { valid: false, error: "since must be a valid timestamp" };
@@ -57,7 +55,6 @@ export function validateQueryParams(
     result.since = parsed;
   }
 
-  // until
   if (query.until !== undefined) {
     if (typeof query.until !== "string") {
       return { valid: false, error: "until must be a valid timestamp" };
@@ -73,7 +70,6 @@ export function validateQueryParams(
     return { valid: false, error: "until must not be earlier than since" };
   }
 
-  // attr.<key> 
   for (const [key, value] of Object.entries(query)) {
     if (key.startsWith("attr.")) {
       const attrKey = key.slice("attr.".length);
@@ -91,7 +87,6 @@ export function validateQueryParams(
     result.q = query.q;
   }
 
-  // limit
   if (query.limit !== undefined) {
     if (typeof query.limit !== "string" || !/^\d+$/.test(query.limit)) {
       return { valid: false, error: `limit must be a positive integer` };
@@ -106,7 +101,6 @@ export function validateQueryParams(
     result.limit = parsedLimit;
   }
 
-  // cursor
   if (query.cursor !== undefined) {
     if (typeof query.cursor !== "string") {
       return { valid: false, error: "invalid cursor" };
@@ -147,6 +141,7 @@ function decodeCursor(cursor: string): { timestamp: Date; id: number } | null {
     return null;
   }
 }
+
 const BUCKET_SECONDS: Record<string, number> = {
   "1m": 60,
   "5m": 300,
@@ -182,7 +177,6 @@ export function validateAggregateParams(
     return { valid: false, error: `invalid since timestamp: '${query.since}'` };
   }
 
-  // until
   if (query.until === undefined || typeof query.until !== "string") {
     return { valid: false, error: "until is required" };
   }
@@ -195,7 +189,6 @@ export function validateAggregateParams(
     return { valid: false, error: "until must not be earlier than since" };
   }
 
-  // bucket
   if (
     query.bucket === undefined ||
     typeof query.bucket !== "string" ||
@@ -208,7 +201,6 @@ export function validateAggregateParams(
   }
   const bucketSeconds = BUCKET_SECONDS[query.bucket];
 
-  // group_by
   let groupBy: "service" | "level" | undefined;
   if (query.group_by !== undefined) {
     if (query.group_by !== "service" && query.group_by !== "level") {
@@ -225,7 +217,6 @@ export function validateAggregateParams(
     groupBy,
   };
 
-  // service 
   if (query.service !== undefined) {
     if (typeof query.service !== "string" || query.service.trim() === "") {
       return { valid: false, error: "service must be a non-empty string" };
@@ -233,7 +224,6 @@ export function validateAggregateParams(
     params.service = query.service;
   }
 
-  // level 
   const VALID_LEVELS = ["debug", "info", "warn", "error"];
   if (query.level !== undefined) {
     if (typeof query.level !== "string" || !VALID_LEVELS.includes(query.level)) {
@@ -242,7 +232,6 @@ export function validateAggregateParams(
     params.level = query.level;
   }
 
-  // attr.<key>
   for (const [key, value] of Object.entries(query)) {
     if (key.startsWith("attr.")) {
       const attrKey = key.slice("attr.".length);
@@ -253,7 +242,6 @@ export function validateAggregateParams(
     }
   }
 
-  // q
   if (query.q !== undefined) {
     if (typeof query.q !== "string") {
       return { valid: false, error: "q must be a string" };

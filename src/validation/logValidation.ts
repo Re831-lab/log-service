@@ -1,7 +1,7 @@
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
-const VALID_LEVELS: LogLevel[] = ["debug", "info", "warn", "error"];
-const MAX_FUTURE_MS = 5 * 60 * 1000; 
+const VALID_LEVELS = new Set<string>(["debug", "info", "warn", "error"]);
+const MAX_FUTURE_MS = 5 * 60 * 1000;
 
 export interface RawLogEntry {
   timestamp?: unknown;
@@ -25,15 +25,13 @@ export interface ValidationResult {
   reason?: string;
 }
 
-export function validateLogEntry(raw: unknown): ValidationResult {
-  
+export function validateLogEntry(raw: unknown, now: number): ValidationResult {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return { valid: false, reason: "log entry must be an object" };
   }
 
   const entry = raw as RawLogEntry;
 
-  //timestamp
   if (entry.timestamp === undefined || entry.timestamp === null) {
     return { valid: false, reason: "timestamp is required" };
   }
@@ -41,23 +39,21 @@ export function validateLogEntry(raw: unknown): ValidationResult {
     return { valid: false, reason: "timestamp must be a string" };
   }
   const parsedDate = new Date(entry.timestamp);
-  if (isNaN(parsedDate.getTime())) {
+  const parsedTime = parsedDate.getTime();
+  if (isNaN(parsedTime)) {
     return { valid: false, reason: `invalid timestamp: '${entry.timestamp}'` };
   }
-  const now = Date.now();
-  if (parsedDate.getTime() - now > MAX_FUTURE_MS) {
+  if (parsedTime - now > MAX_FUTURE_MS) {
     return { valid: false, reason: "timestamp is more than five minutes in the future" };
   }
 
-  //level
   if (entry.level === undefined || entry.level === null) {
     return { valid: false, reason: "level is required" };
   }
-  if (typeof entry.level !== "string" || !VALID_LEVELS.includes(entry.level as LogLevel)) {
+  if (typeof entry.level !== "string" || !VALID_LEVELS.has(entry.level)) {
     return { valid: false, reason: `invalid level: '${entry.level}'` };
   }
 
-  //service
   if (entry.service === undefined || entry.service === null) {
     return { valid: false, reason: "service is required" };
   }
@@ -65,7 +61,6 @@ export function validateLogEntry(raw: unknown): ValidationResult {
     return { valid: false, reason: "service must be a non-empty string" };
   }
 
-  // message
   if (entry.message === undefined || entry.message === null) {
     return { valid: false, reason: "message is required" };
   }
@@ -73,16 +68,16 @@ export function validateLogEntry(raw: unknown): ValidationResult {
     return { valid: false, reason: "message must be a non-empty string" };
   }
 
-  //attributes 
   let attributes: Record<string, string | number | boolean> = {};
   if (entry.attributes !== undefined && entry.attributes !== null) {
-    if (
-      typeof entry.attributes !== "object" ||
-      Array.isArray(entry.attributes)
-    ) {
+    if (typeof entry.attributes !== "object" || Array.isArray(entry.attributes)) {
       return { valid: false, reason: "attributes must be a flat object" };
     }
-    for (const [key, value] of Object.entries(entry.attributes)) {
+
+    const rawAttrs = entry.attributes as Record<string, unknown>;
+    for (const key in rawAttrs) {
+      if (!Object.prototype.hasOwnProperty.call(rawAttrs, key)) continue;
+      const value = rawAttrs[key];
       if (
         typeof value !== "string" &&
         typeof value !== "number" &&
@@ -94,7 +89,7 @@ export function validateLogEntry(raw: unknown): ValidationResult {
         };
       }
     }
-    attributes = entry.attributes as Record<string, string | number | boolean>;
+    attributes = rawAttrs as Record<string, string | number | boolean>;
   }
 
   return {

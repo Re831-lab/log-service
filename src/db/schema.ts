@@ -1,4 +1,5 @@
 import { pgTable, bigserial, timestamp, text, jsonb, index } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 export const logs = pgTable(
   "logs",
@@ -12,11 +13,9 @@ export const logs = pgTable(
   },
   (table) => [
     index("idx_logs_timestamp_id").on(table.timestamp.desc(), table.id.desc()),
-
     index("idx_logs_service_timestamp").on(table.service, table.timestamp.desc()),
-
     index("idx_logs_level_timestamp").on(table.level, table.timestamp.desc()),
-
-    index("idx_logs_attributes").using("gin", table.attributes),
+    index("idx_logs_attr_user_id").using("btree", sql`(${table.attributes}->>'user_id')`),
+    index("idx_logs_attr_region").using("btree", sql`(${table.attributes}->>'region')`),
   ]
 );

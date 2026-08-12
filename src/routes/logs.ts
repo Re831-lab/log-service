@@ -26,12 +26,12 @@ logsRouter.post("/logs", async (req: Request, res: Response) => {
   }
 
   const rawLogs: unknown[] = body.logs;
-
   const validEntries: ValidatedLogEntry[] = [];
   const rejected: RejectedEntry[] = [];
+  const now = Date.now();
 
   rawLogs.forEach((rawLog, index) => {
-    const result = validateLogEntry(rawLog);
+    const result = validateLogEntry(rawLog, now);
     if (result.valid && result.entry) {
       validEntries.push(result.entry);
     } else {
@@ -46,7 +46,12 @@ logsRouter.post("/logs", async (req: Request, res: Response) => {
     });
   }
 
-  await insertLogs(validEntries);
+  try {
+    await insertLogs(validEntries);
+  } catch (err) {
+    console.error("Failed to insert logs:", err);
+    return res.status(500).json({ error: "failed to persist logs" });
+  }
 
   return res.status(200).json({
     accepted: validEntries.length,
@@ -86,6 +91,7 @@ logsRouter.get("/logs", async (req: Request, res: Response) => {
     next_cursor: nextCursor,
   });
 });
+
 logsRouter.get("/logs/aggregate", async (req: Request, res: Response) => {
   const validation = validateAggregateParams(req.query as Record<string, unknown>);
 

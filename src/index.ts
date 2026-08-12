@@ -6,7 +6,6 @@ import { sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { runRetentionMaintenance, startRetentionScheduler } from "./db/retention.js";
 
-
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 8080;
 

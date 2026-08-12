@@ -1,25 +1,93 @@
-import { db } from "../db/index.js";
+import { db, pool } from "../db/index.js";
 import { logs } from "../db/schema.js";
 import type { ValidatedLogEntry } from "../validation/logValidation.js";
 import type { LogQueryParams } from "../validation/queryValidation.js";
 import { and, or, eq, lt, gte, ilike, sql, desc } from "drizzle-orm";
 import type { AggregateQueryParams } from "../validation/queryValidation.js";
+import { from as copyFrom } from "pg-copy-streams";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+
+function csvField(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+
+type ResolveFunc = () => void;
+type RejectFunc = (err: Error) => void;
+
+interface PendingBatch {
+  entries: ValidatedLogEntry[];
+  resolve: ResolveFunc;
+  reject: RejectFunc;
+}
+
+let pendingBatches: PendingBatch[] = [];
+let isFlushing = false;
 
 export async function insertLogs(entries: ValidatedLogEntry[]): Promise<void> {
   if (entries.length === 0) {
     return;
   }
 
-  await db.insert(logs).values(
-    entries.map((entry) => ({
-      timestamp: entry.timestamp,
-      level: entry.level,
-      service: entry.service,
-      message: entry.message,
-      attributes: entry.attributes,
-    }))
-  );
+  return new Promise((resolve, reject) => {
+    pendingBatches.push({ entries, resolve, reject });
+  });
 }
+
+setInterval(async () => {
+  if (isFlushing || pendingBatches.length === 0) return;
+
+  isFlushing = true;
+  const batchesToProcess = pendingBatches;
+  pendingBatches = [];
+
+  try {
+    const client = await pool.connect();
+    try {
+      const ingestStream = client.query(
+        copyFrom(
+          `COPY logs (timestamp, level, service, message, attributes) FROM STDIN WITH (FORMAT csv)`
+        )
+      );
+
+      let csvData = "";
+      for (let i = 0; i < batchesToProcess.length; i++) {
+        const batch = batchesToProcess[i];
+        for (let j = 0; j < batch.entries.length; j++) {
+          const e = batch.entries[j];
+          csvData += [
+            csvField(e.timestamp.toISOString()),
+            csvField(e.level),
+            csvField(e.service),
+            csvField(e.message),
+            csvField(JSON.stringify(e.attributes)),
+          ].join(",") + "\n";
+        }
+      }
+
+      const sourceStream = Readable.from([csvData]);
+
+      await pipeline(sourceStream, ingestStream);
+
+      for (const batch of batchesToProcess) {
+        batch.resolve();
+      }
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    for (const batch of batchesToProcess) {
+      batch.reject(err as Error);
+    }
+  } finally {
+    isFlushing = false;
+  }
+}, 30);
+
+// -----------------------------------------------------------------------------
+// دوال الاستعلام (بدون تغيير)
+// -----------------------------------------------------------------------------
 
 export interface LogRow {
   id: number;
@@ -33,7 +101,6 @@ export interface LogRow {
 export async function queryLogs(params: LogQueryParams): Promise<LogRow[]> {
   const conditions = [];
 
-  
   if (params.service) {
     conditions.push(eq(logs.service, params.service));
   }
@@ -41,7 +108,6 @@ export async function queryLogs(params: LogQueryParams): Promise<LogRow[]> {
     conditions.push(eq(logs.level, params.level));
   }
 
-  // since inclusive، until exclusive
   if (params.since) {
     conditions.push(gte(logs.timestamp, params.since));
   }
@@ -49,17 +115,14 @@ export async function queryLogs(params: LogQueryParams): Promise<LogRow[]> {
     conditions.push(lt(logs.timestamp, params.until));
   }
 
-  // case-insensitive 
   if (params.q) {
     conditions.push(ilike(logs.message, `%${params.q}%`));
   }
 
-  // attr.<key>=value 
   for (const [key, value] of Object.entries(params.attributes)) {
     conditions.push(sql`${logs.attributes}->>${key} = ${value}`);
   }
 
-  // Cursor pagination:
   if (params.cursor) {
     const { timestamp, id } = params.cursor;
     conditions.push(
@@ -77,13 +140,10 @@ export async function queryLogs(params: LogQueryParams): Promise<LogRow[]> {
     .from(logs)
     .where(whereClause)
     .orderBy(desc(logs.timestamp), desc(logs.id))
-    .limit(params.limit + 1); 
+    .limit(params.limit + 1);
 
   return rows as LogRow[];
 }
-
-
-
 
 export interface AggregateRow {
   bucketStart: Date;

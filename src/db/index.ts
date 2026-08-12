@@ -3,8 +3,9 @@ import { Pool } from "pg";
 import * as schema from "./schema.js";
 import "dotenv/config";
 
-const pool = new Pool({
+export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  max: 20,
 });
 
 export const db = drizzle(pool, { schema });
