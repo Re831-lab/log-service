@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { validateLogEntry, type ValidatedLogEntry } from "../validation/logValidation.js";
 import { validateQueryParams, encodeCursor } from "../validation/queryValidation.js";
-import { insertLogs, queryLogs } from "../repositories/logRepository.js";
+import { enqueueLogs, queryLogs, QueueFullError } from "../repositories/logRepository.js";
 import { validateAggregateParams } from "../validation/queryValidation.js";
 import { queryAggregate } from "../repositories/logRepository.js";
 
@@ -47,13 +47,16 @@ logsRouter.post("/logs", async (req: Request, res: Response) => {
   }
 
   try {
-    await insertLogs(validEntries);
+    enqueueLogs(validEntries);
   } catch (err) {
-    console.error("Failed to insert logs:", err);
-    return res.status(500).json({ error: "failed to persist logs" });
+    if (err instanceof QueueFullError) {
+      return res.status(503).json({ error: err.message });
+    }
+    console.error("Unexpected error while enqueueing logs:", err);
+    return res.status(500).json({ error: "failed to accept logs" });
   }
 
-  return res.status(200).json({
+  return res.status(202).json({
     accepted: validEntries.length,
     rejected,
   });

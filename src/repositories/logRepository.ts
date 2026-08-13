@@ -12,36 +12,65 @@ function csvField(value: string): string {
   return `"${value.replace(/"/g, '""')}"`;
 }
 
+const FLUSH_MAX_WAIT_MS = 100;
+const FLUSH_MAX_BATCH_SIZE = 5000;
+const MAX_QUEUE_SIZE = 200_000;
+const MAX_RETRY_ATTEMPTS = 3;
 
-type ResolveFunc = () => void;
-type RejectFunc = (err: Error) => void;
+let pendingEntries: ValidatedLogEntry[] = [];
+let isFlushing = false;
+let flushTimer: NodeJS.Timeout | null = null;
 
-interface PendingBatch {
-  entries: ValidatedLogEntry[];
-  resolve: ResolveFunc;
-  reject: RejectFunc;
+export class QueueFullError extends Error {
+  constructor() {
+    super("ingest queue is full, try again shortly");
+    this.name = "QueueFullError";
+  }
 }
 
-let pendingBatches: PendingBatch[] = [];
-let isFlushing = false;
+export function enqueueLogs(entries: ValidatedLogEntry[]): void {
+  if (entries.length === 0) return;
 
-export async function insertLogs(entries: ValidatedLogEntry[]): Promise<void> {
-  if (entries.length === 0) {
-    return;
+  if (pendingEntries.length + entries.length > MAX_QUEUE_SIZE) {
+    throw new QueueFullError();
   }
 
-  return new Promise((resolve, reject) => {
-    pendingBatches.push({ entries, resolve, reject });
-  });
+  pendingEntries.push(...entries);
+
+  if (pendingEntries.length >= FLUSH_MAX_BATCH_SIZE) {
+    void triggerFlush();
+  } else if (!flushTimer) {
+    flushTimer = setTimeout(() => void triggerFlush(), FLUSH_MAX_WAIT_MS);
+  }
 }
 
-setInterval(async () => {
-  if (isFlushing || pendingBatches.length === 0) return;
+async function triggerFlush(): Promise<void> {
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+
+  if (isFlushing || pendingEntries.length === 0) return;
 
   isFlushing = true;
-  const batchesToProcess = pendingBatches;
-  pendingBatches = [];
+  const batch = pendingEntries;
+  pendingEntries = [];
 
+  await flushBatchWithRetry(batch, 0);
+
+  isFlushing = false;
+
+  if (pendingEntries.length >= FLUSH_MAX_BATCH_SIZE) {
+    void triggerFlush();
+  } else if (pendingEntries.length > 0 && !flushTimer) {
+    flushTimer = setTimeout(() => void triggerFlush(), FLUSH_MAX_WAIT_MS);
+  }
+}
+
+async function flushBatchWithRetry(
+  batch: ValidatedLogEntry[],
+  attempt: number
+): Promise<void> {
   try {
     const client = await pool.connect();
     try {
@@ -52,42 +81,39 @@ setInterval(async () => {
       );
 
       let csvData = "";
-      for (let i = 0; i < batchesToProcess.length; i++) {
-        const batch = batchesToProcess[i];
-        for (let j = 0; j < batch.entries.length; j++) {
-          const e = batch.entries[j];
-          csvData += [
+      for (const e of batch) {
+        csvData +=
+          [
             csvField(e.timestamp.toISOString()),
             csvField(e.level),
             csvField(e.service),
             csvField(e.message),
             csvField(JSON.stringify(e.attributes)),
           ].join(",") + "\n";
-        }
       }
 
       const sourceStream = Readable.from([csvData]);
-
       await pipeline(sourceStream, ingestStream);
-
-      for (const batch of batchesToProcess) {
-        batch.resolve();
-      }
     } finally {
       client.release();
     }
   } catch (err) {
-    for (const batch of batchesToProcess) {
-      batch.reject(err as Error);
-    }
-  } finally {
-    isFlushing = false;
-  }
-}, 30);
+    console.error(
+      `Flush attempt ${attempt + 1} failed for batch of ${batch.length}:`,
+      err
+    );
 
-// -----------------------------------------------------------------------------
-// دوال الاستعلام (بدون تغيير)
-// -----------------------------------------------------------------------------
+    if (attempt + 1 >= MAX_RETRY_ATTEMPTS) {
+      console.error(
+        `Dropping batch of ${batch.length} logs after ${MAX_RETRY_ATTEMPTS} failed attempts.`
+      );
+      return;
+    }
+
+    await new Promise((r) => setTimeout(r, 50 * (attempt + 1)));
+    return flushBatchWithRetry(batch, attempt + 1);
+  }
+}
 
 export interface LogRow {
   id: number;
