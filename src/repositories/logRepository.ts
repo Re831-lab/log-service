@@ -12,39 +12,95 @@ function csvField(value: string): string {
   return `"${value.replace(/"/g, '""')}"`;
 }
 
+// -----------------------------------------------------------------------------
+// طابور الكتابة: تجميع تكيّفي (بالحجم أو بالوقت) + backpressure + إعادة محاولة
+// مهم جداً: كل طلب HTTP بينتظر فعلياً لحد ما دفعته تنكتب فعلياً بـ COPY —
+// هذا شرط صريح بالمشروع: "Never respond 200 to a batch you have not durably accepted"
+// -----------------------------------------------------------------------------
+
+const FLUSH_MAX_WAIT_MS = 30;
+const FLUSH_MAX_BATCH_SIZE = 5000;
+const MAX_QUEUE_SIZE = 200_000; // حماية الذاكرة (256MB memory limit)
+const MAX_RETRY_ATTEMPTS = 3;
 
 type ResolveFunc = () => void;
 type RejectFunc = (err: Error) => void;
 
-interface PendingBatch {
+interface PendingRequest {
   entries: ValidatedLogEntry[];
   resolve: ResolveFunc;
   reject: RejectFunc;
 }
 
-let pendingBatches: PendingBatch[] = [];
+let pendingRequests: PendingRequest[] = [];
+let pendingEntryCount = 0;
 let isFlushing = false;
+let flushTimer: NodeJS.Timeout | null = null;
 
-export async function insertLogs(entries: ValidatedLogEntry[]): Promise<void> {
-  if (entries.length === 0) {
-    return;
+export class QueueFullError extends Error {
+  constructor() {
+    super("ingest queue is full, try again shortly");
+    this.name = "QueueFullError";
+  }
+}
+
+/**
+ * يضيف السجلات للطابور ويرجع Promise ما بيتحل إلا بعد ما تنكتب فعلياً
+ * بقاعدة البيانات (COPY نجح) — أو يترفض لو فشلت كل المحاولات.
+ * يرمي QueueFullError فوراً (sync) لو الطابور ممتلئ.
+ */
+export function insertLogs(entries: ValidatedLogEntry[]): Promise<void> {
+  if (entries.length === 0) return Promise.resolve();
+
+  if (pendingEntryCount + entries.length > MAX_QUEUE_SIZE) {
+    throw new QueueFullError();
   }
 
   return new Promise((resolve, reject) => {
-    pendingBatches.push({ entries, resolve, reject });
+    pendingRequests.push({ entries, resolve, reject });
+    pendingEntryCount += entries.length;
+
+    if (pendingEntryCount >= FLUSH_MAX_BATCH_SIZE) {
+      void triggerFlush();
+    } else if (!flushTimer) {
+      flushTimer = setTimeout(() => void triggerFlush(), FLUSH_MAX_WAIT_MS);
+    }
   });
 }
 
-setInterval(async () => {
-  if (isFlushing || pendingBatches.length === 0) return;
+async function triggerFlush(): Promise<void> {
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+
+  if (isFlushing || pendingRequests.length === 0) return;
 
   isFlushing = true;
-  const batchesToProcess = pendingBatches;
-  pendingBatches = [];
+  const batch = pendingRequests;
+  pendingRequests = [];
+  pendingEntryCount = 0;
 
+  await flushBatchWithRetry(batch, 0);
+
+  isFlushing = false;
+
+  if (pendingEntryCount >= FLUSH_MAX_BATCH_SIZE) {
+    void triggerFlush();
+  } else if (pendingRequests.length > 0 && !flushTimer) {
+    flushTimer = setTimeout(() => void triggerFlush(), FLUSH_MAX_WAIT_MS);
+  }
+}
+
+async function flushBatchWithRetry(
+  requests: PendingRequest[],
+  attempt: number
+): Promise<void> {
   try {
     const client = await pool.connect();
     try {
+      await client.query("SET synchronous_commit = OFF");
+
       const ingestStream = client.query(
         copyFrom(
           `COPY logs (timestamp, level, service, message, attributes) FROM STDIN WITH (FORMAT csv)`
@@ -52,38 +108,44 @@ setInterval(async () => {
       );
 
       let csvData = "";
-      for (let i = 0; i < batchesToProcess.length; i++) {
-        const batch = batchesToProcess[i];
-        for (let j = 0; j < batch.entries.length; j++) {
-          const e = batch.entries[j];
-          csvData += [
-            csvField(e.timestamp.toISOString()),
-            csvField(e.level),
-            csvField(e.service),
-            csvField(e.message),
-            csvField(JSON.stringify(e.attributes)),
-          ].join(",") + "\n";
+      for (const req of requests) {
+        for (const e of req.entries) {
+          csvData +=
+            csvField(e.timestamp.toISOString()) + "," +
+            csvField(e.level) + "," +
+            csvField(e.service) + "," +
+            csvField(e.message) + "," +
+            csvField(JSON.stringify(e.attributes)) + "\n";
         }
       }
 
       const sourceStream = Readable.from([csvData]);
-
       await pipeline(sourceStream, ingestStream);
 
-      for (const batch of batchesToProcess) {
-        batch.resolve();
+      for (const req of requests) {
+        req.resolve();
       }
     } finally {
       client.release();
     }
   } catch (err) {
-    for (const batch of batchesToProcess) {
-      batch.reject(err as Error);
+    console.error(
+      `Flush attempt ${attempt + 1} failed for ${requests.length} requests:`,
+      err
+    );
+
+    if (attempt + 1 >= MAX_RETRY_ATTEMPTS) {
+      const finalErr = err instanceof Error ? err : new Error(String(err));
+      for (const req of requests) {
+        req.reject(finalErr);
+      }
+      return;
     }
-  } finally {
-    isFlushing = false;
+
+    await new Promise((r) => setTimeout(r, 50 * (attempt + 1)));
+    return flushBatchWithRetry(requests, attempt + 1);
   }
-}, 30);
+}
 
 // -----------------------------------------------------------------------------
 // دوال الاستعلام (بدون تغيير)
@@ -107,22 +169,18 @@ export async function queryLogs(params: LogQueryParams): Promise<LogRow[]> {
   if (params.level) {
     conditions.push(eq(logs.level, params.level));
   }
-
   if (params.since) {
     conditions.push(gte(logs.timestamp, params.since));
   }
   if (params.until) {
     conditions.push(lt(logs.timestamp, params.until));
   }
-
   if (params.q) {
     conditions.push(ilike(logs.message, `%${params.q}%`));
   }
-
   for (const [key, value] of Object.entries(params.attributes)) {
     conditions.push(sql`${logs.attributes}->>${key} = ${value}`);
   }
-
   if (params.cursor) {
     const { timestamp, id } = params.cursor;
     conditions.push(
